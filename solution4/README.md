@@ -27,7 +27,7 @@ This project demonstrates:
 
 1. **Clone the repository**
    ```bash
-   git clone <https://github.com/chientran1996/99techteam-code-challenge.git> solution4
+   git clone https://github.com/chientran1996/99techteam-code-challenge.git solution4
    cd solution4
 
 2. **Install dependencies**
@@ -37,7 +37,8 @@ This project demonstrates:
 3. **Run development server**
    ```bash
    npm run dev
-   Open http://localhost:3000 in your browser.
+   
+Open http://localhost:3000 in your browser.
 
 
 ## Testing
