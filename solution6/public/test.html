@@ -1,0 +1,264 @@
+<!doctype html>
+<html lang="en">
+
+<head>
+    <meta charset="utf-8" />
+    <title>Solution6 Test Console</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <style>
+        body {
+            font-family: ui-sans-serif, system-ui, "Segoe UI", Roboto, Arial;
+            margin: 24px;
+        }
+
+        .row {
+            display: flex;
+            gap: 16px;
+            flex-wrap: wrap;
+        }
+
+        .card {
+            border: 1px solid #ddd;
+            border-radius: 10px;
+            padding: 16px;
+            margin-bottom: 16px;
+        }
+
+        label {
+            display: block;
+            font-size: 12px;
+            color: #555;
+            margin-bottom: 4px;
+        }
+
+        input,
+        textarea,
+        select {
+            padding: 8px;
+            width: 260px;
+        }
+
+        button {
+            padding: 10px 14px;
+            cursor: pointer;
+        }
+
+        table {
+            border-collapse: collapse;
+            width: 100%;
+            margin-top: 12px;
+        }
+
+        th,
+        td {
+            border: 1px solid #eaeaea;
+            padding: 8px;
+            text-align: left;
+        }
+
+        .ok {
+            color: #0a8;
+        }
+
+        .err {
+            color: #d33;
+        }
+
+        .mono {
+            font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+        }
+
+        .small {
+            font-size: 12px;
+            color: #666
+        }
+    </style>
+    <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
+</head>
+
+<body>
+    <h1>Solution6 Test Console</h1>
+    <p class="small">
+        This page lets you (1) <b>send signed webhook calls</b> to <code>/actions/score-update</code> and
+        (2) <b>watch real-time</b> leaderboard updates via Socket.IO.
+        For dev only. Do not expose in production.
+    </p>
+
+    <div class="card">
+        <h3>Realtime Leaderboard</h3>
+        <div class="row">
+            <button id="btnRefresh">Refresh Top 10 (GET /leaderboard/top)</button>
+            <span id="rtStatus" class="small">socket: connecting…</span>
+        </div>
+        <table id="tbl">
+            <thead>
+                <tr>
+                    <th>#</th>
+                    <th>User ID</th>
+                    <th>Score</th>
+                </tr>
+            </thead>
+            <tbody></tbody>
+        </table>
+    </div>
+
+    <div class="card">
+        <h3>Send Score Update (simulate trusted platform → signed webhook)</h3>
+        <div class="row">
+            <div>
+                <label>Server URL</label>
+                <input id="serverUrl" value="http://localhost:3000">
+            </div>
+            <div>
+                <label>Shared Secret (ACTION_WEBHOOK_SECRET)</label>
+                <input id="secret" value="a_long_text_here">
+            </div>
+        </div>
+        <div class="row">
+            <div>
+                <label>User ID</label>
+                <input id="userId" value="u_1">
+            </div>
+            <div>
+                <label>Points</label>
+                <input id="points" type="number" value="10">
+            </div>
+            <div>
+                <label>Action ID</label>
+                <input id="actionId" value="quiz#1">
+            </div>
+            <div>
+                <label>Reason (optional)</label>
+                <input id="reason" value="Manual test">
+            </div>
+        </div>
+        <div class="row">
+            <button id="btnSend">Send 1 update</button>
+            <button id="btnSpam">Send 10 randomized updates</button>
+            <span id="sendStatus"></span>
+        </div>
+
+        <details style="margin-top:10px">
+            <summary>Webhook request preview</summary>
+            <pre class="mono" id="preview"></pre>
+        </details>
+    </div>
+
+    <script>
+        // --- Utilities ---
+        function uuidv4() {
+            // RFC4122 v4 (simple)
+            return ([1e7] + -1e3 + -4e3 + -8e3 + -1e11).replace(/[018]/g, c =>
+                (c ^ crypto.getRandomValues(new Uint8Array(1))[0] & 15 >> c / 4).toString(16)
+            );
+        }
+        async function hmacSha256Hex(key, msg) {
+            const enc = new TextEncoder();
+            const cryptoKey = await crypto.subtle.importKey(
+                "raw", enc.encode(key), { name: "HMAC", hash: "SHA-256" }, false, ["sign"]
+            );
+            const sig = await crypto.subtle.sign("HMAC", cryptoKey, enc.encode(msg));
+            return [...new Uint8Array(sig)].map(b => b.toString(16).padStart(2, "0")).join("");
+        }
+
+        // --- Realtime (Socket.IO) ---
+        const serverUrlEl = document.getElementById('serverUrl');
+        const tblBody = document.querySelector('#tbl tbody');
+        const rtStatus = document.getElementById('rtStatus');
+
+        let socket;
+        function connectSocket() {
+            try {
+                socket = io(serverUrlEl.value, { transports: ["websocket"] });
+                socket.on("connect", () => rtStatus.textContent = `socket: connected (#${socket.id})`);
+                socket.on("disconnect", () => rtStatus.textContent = "socket: disconnected");
+                socket.on("leaderboard.updated", (msg) => renderTop(msg.top10));
+            } catch (e) {
+                rtStatus.textContent = "socket: failed to connect";
+            }
+        }
+        function renderTop(items) {
+            tblBody.innerHTML = "";
+            (items || []).forEach((it, idx) => {
+                const tr = document.createElement("tr");
+                tr.innerHTML = `<td>${idx + 1}</td><td>${it.user_id}</td><td>${it.score}</td>`;
+                tblBody.appendChild(tr);
+            });
+        }
+
+        // --- Fetch top from API ---
+        async function refreshTop() {
+            const url = `${serverUrlEl.value.replace(/\/$/, "")}/leaderboard/top?limit=10`;
+            const res = await fetch(url);
+            const data = await res.json();
+            renderTop(data.items);
+        }
+        document.getElementById('btnRefresh').onclick = refreshTop;
+
+        // --- Send webhook ---
+        async function sendOnce(payload) {
+            const base = serverUrlEl.value.replace(/\/$/, "");
+            const ts = Date.now().toString();
+            const raw = JSON.stringify(payload);
+            const secret = document.getElementById("secret").value;
+            const msg = `${ts}.${raw}`;
+            const sig = await hmacSha256Hex(secret, msg);
+            const idk = uuidv4();
+
+            document.getElementById("preview").textContent =
+                `POST ${base}/actions/score-update
+                X-Timestamp: ${ts}
+                X-Signature: sha256=${sig}
+                Idempotency-Key: ${idk}
+                Content-Type: application/json
+
+                ${raw}`;
+
+            const res = await fetch(`${base}/actions/score-update`, {
+                method: "POST",
+                headers: {
+                    "Content-Type": "application/json",
+                    "X-Timestamp": ts,
+                    "X-Signature": `sha256=${sig}`,
+                    "Idempotency-Key": idk
+                },
+                body: raw
+            });
+            const ok = res.ok;
+            const text = await res.text();
+            return { ok, status: res.status, body: text };
+        }
+
+        document.getElementById('btnSend').onclick = async () => {
+            const payload = {
+                user_id: document.getElementById('userId').value,
+                points: Number(document.getElementById('points').value),
+                action_id: document.getElementById('actionId').value,
+                reason: document.getElementById('reason').value || undefined
+            };
+            const out = await sendOnce(payload);
+            document.getElementById('sendStatus').innerHTML =
+                out.ok ? `<span class="ok">OK ${out.status}</span>` :
+                    `<span class="err">ERR ${out.status}</span>`;
+            if (!out.ok) console.error(out);
+            await refreshTop(); // also force-refresh
+        };
+
+        document.getElementById('btnSpam').onclick = async () => {
+            const baseUser = document.getElementById('userId').value || "u_";
+            const pts = Number(document.getElementById('points').value) || 5;
+            for (let i = 0; i < 10; i++) {
+                const uid = `${baseUser}${Math.ceil(Math.random() * 5)}`; // u_1..u_5
+                const payload = { user_id: uid, points: pts, action_id: `rnd#${Date.now()}#${i}`, reason: "spam test" };
+                await sendOnce(payload);
+            }
+            await refreshTop();
+        };
+
+        // Init
+        connectSocket();
+        refreshTop();
+    </script>
+</body>
+
+</html>

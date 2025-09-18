@@ -82,3 +82,28 @@ This module implements a real-time leaderboard (top 10 user scores) and a secure
     Response:
 
     { "user_id": "u_123", "score": 1337, "updated_at": "2025-09-18T07:00:00Z" }
+
+## Security
+
+    Server-to-server only: the action platform calls the webhook, not browsers.
+    HMAC verification: reject if signature mismatch or clock skew > 5 minutes.
+    Idempotency: Idempotency-Key stored with SET NX in Redis (TTL 24h).
+    Replay protection: timestamp check + short-lived nonce store.
+    Business rules: per-action uniqueness (user_id + action_id), daily caps, point bounds.
+    Rate limiting: per IP/app and per user.
+    Secrets: stored in env, rotated regularly.
+
+## Running Locally
+
+    ```bash
+    # Env
+    cp .env.example .env
+    # Required:
+    # DATABASE_URL=postgres://...
+    # REDIS_URL=redis://...
+    # PORT
+    # ACTION_WEBHOOK_SECRET=a_long_text_here
+
+    docker compose up -d
+    npm install
+    npm run dev

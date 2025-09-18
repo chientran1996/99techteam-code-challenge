@@ -11,6 +11,7 @@ app.post("/actions/score-update", express.raw({ type: "application/json" }), sco
 
 // JSON for all other routes
 app.use(express.json());
+app.use(express.static("public"));
 
 app.use("/leaderboard", leaderboardRouter);
 app.get("/", (_req, res) => res.send("OK"));
